@@ -63,47 +63,55 @@ except KeyError as e:
 
 
 # Определим команды и функции-обработчики сообщений
+from telegram.helpers import mention_html
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /start. При старте бота пользователь получает приветственное сообщение."""
     user = update.effective_user
-    await update.message.reply_html(
-        rf"Hi {user.mention_html()}!",
+    message = update.effective_message
+
+    if user is None or message is None:
+        return
+
+    await message.reply_html(
+        f"Hi {mention_html(user.id, user.first_name)}!",
         reply_markup=ForceReply(selective=True),
     )
 
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Основная функция для обработки текстовых сообщений от пользователя с целью ответа на них с помощью AI."""
-    user_message = update.message.text
-    user = update.effective_user.first_name     
-    user_message = f'{user_message}. Имя пользователя: {user}'
-    # Получаем историю сообщений из context.chat_data
-    history = context.chat_data.get("history", [])
+    message = update.effective_message
+    user = update.effective_user
+
+    if message is None or user is None or message.text is None:
+        return
+
+    user_message = f"{message.text}. Имя пользователя: {user.first_name or 'друг'}"
+    history = context.chat_data.get("history", []) # pyright: ignore[reportOptionalMemberAccess]
     logger.debug(f"History: {history}")
 
-    # Передаем текущий запрос и историю сообщений в llm_service
     llm_response = chat_with_llm(user_message, history=history)
-    context.chat_data["history"] = history  # сохраняем обновленную историю
-    await update.message.reply_text(llm_response)
+    context.chat_data["history"] = history # pyright: ignore[reportOptionalSubscript]
+    await message.reply_text(llm_response or "В доступной информации это не указано.")
 
 
 def main() -> None:
     """Функция инициализации бот-приложения."""
-    # Создание основного объекта приложения Telegram API
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Обработчик всех текстовых сообщений без команды
-    chat_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, chat)  
+    if TELEGRAM_BOT_TOKEN is None or not TELEGRAM_BOT_TOKEN.strip():
+        raise ValueError("TELEGRAM_BOT_TOKEN пустой или не загружен")
 
-    # Регистрируем обработчики:
-    # Команда /start
-    application.add_handler(CommandHandler("start", start))
-    # Все остальные текстовые сообщения обрабатываются chat_handler
-    application.add_handler(chat_handler)
+    try:
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Запуск бота в режиме постоянного ожидания команд.
-    # Бот работает до прекращения программы (нажатие Ctrl-C или завершение по другому сигналу)
-    application.run_polling(allowed_updates=Update.ALL_TYPES)  
+        chat_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, chat)
+
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(chat_handler)
+
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        logger.exception("Ошибка при запуске бота")
+        raise
 
 
 if __name__ == "__main__":
